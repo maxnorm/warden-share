@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+[[ ! ${WARDEN_DIR} ]] && >&2 echo -e "\033[31mThis script is not intended to be run directly!\033[0m" && exit 1
+
+WARDEN_USAGE=$(cat <<EOF
+\033[33mUsage:\033[0m
+  warden share [sub-command] [options]
+
+  Expose the local env over the internet via a temporary Cloudflare
+  quick tunnel (random https://*.trycloudflare.com URL, no account or
+  signup needed). Handy to test changes on a real phone over the network.
+
+  The tunnel runs as a throwaway 'cloudflared' docker container attached
+  to the project network and proxies straight to the nginx container,
+  so the real public Host header reaches Magento (valid edge cert, so
+  phones won't complain). Nothing is opened on your router; the URL
+  dies with the container. If the nginx container can't be found, it
+  falls back to proxying local Traefik over the host network.
+
+\033[33mSub-commands:\033[0m
+  up                      Start tunnel (brings env up + pulls cloudflared
+                        image if needed), point Magento base URLs + cookie
+                        domain in app/etc/env.php at the tunnel URL
+                        (followed by 'app:config:import' + cache clean),
+                        then print the public URL with a phone-scannable
+                        QR code (if 'qrencode' is installed). Base URLs
+                        are auto-restored on 'down'. Note: CMS content
+                        with hardcoded .test links is unaffected.
+  down [--keep-base-url] Stop tunnel and restore rewritten base URLs
+                        (skips restore with --keep-base-url)
+  status                Show tunnel state, URL and current base-URL host
+  url                   Print just the tunnel URL (for scripting)
+  logs                  Show cloudflared logs ('warden share logs -f' to follow)
+
+\033[33mExamples:\033[0m
+  warden share up                # share fully working site, test on phone
+  warden share status              # re-print URL / check rewrite state
+  warden share down                # stop tunnel, restore local base URLs
+
+\033[33mNotes:\033[0m
+  * Each 'up' mints a NEW random URL; old URLs stop working on 'down'.
+  * State (URL + original base URLs) is kept in .warden/share.state.
+  * If a rewrite is active and the tunnel is gone, 'down' still restores
+    app/etc/env.php. Never hand-edit the rewritten values mid-share.
+EOF
+)
