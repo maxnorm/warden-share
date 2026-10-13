@@ -13,8 +13,8 @@ WARDEN_USAGE=$(cat <<EOF
   to the project network and proxies straight to the nginx container,
   so the real public Host header reaches Magento (valid edge cert, so
   phones won't complain). Nothing is opened on your router; the URL
-  dies with the container. If the nginx container can't be found, it
-  falls back to proxying local Traefik over the host network.
+  dies with the container. Anyone with the URL can open the site: no
+  auth. Never share production data.
 
 \033[33mSub-commands:\033[0m
   up                      Start tunnel (brings env up + pulls cloudflared
@@ -32,9 +32,9 @@ WARDEN_USAGE=$(cat <<EOF
   logs                  Show cloudflared logs ('warden share logs -f' to follow)
 
 \033[33mExamples:\033[0m
-  warden share up                # share fully working site, test on phone
-  warden share status              # re-print URL / check rewrite state
-  warden share down                # stop tunnel, restore local base URLs
+  warden share up       # share fully working site, test on phone
+  warden share status   # re-print URL / check rewrite state
+  warden share down     # stop tunnel, restore local base URLs
 
 \033[33mNotes:\033[0m
   * Each 'up' mints a NEW random URL; old URLs stop working on 'down'.

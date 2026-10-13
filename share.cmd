@@ -30,43 +30,31 @@ SHARE_IMAGE="${SHARE_IMAGE:-cloudflare/cloudflared:latest}"
 SHARE_STATE_FILE="${WARDEN_ENV_PATH}/.warden/share.state"
 SHARE_ENV_PHP="${WARDEN_ENV_PATH}/app/etc/env.php"
 SHARE_LOCAL_HOST="${TRAEFIK_SUBDOMAIN}.${TRAEFIK_DOMAIN}"
-SHARE_MODE=""
 SHARE_NET=""
 
 shareUsage() {
   "${WARDEN_BIN}" share --help
 }
 
-## Pick how cloudflared reaches Magento. Preferred: straight to the nginx
-## container over the project docker network, so the real public Host header
-## reaches Magento (no canonical-redirect loops, correct cookies). Fallback:
-## via host-network Traefik with a Host override (page loads, but Magento
-## base-URL rewrite is unsupported there because the origin Host won't match).
+## Locate the project's nginx container and its docker network. cloudflared
+## joins that network and proxies straight to nginx, so the real public Host
+## header reaches Magento (no canonical-redirect loops, correct cookies).
+## Returns nonzero when nginx is not running.
 shareDetectOrigin() {
   local nginx_cid net
   nginx_cid="$(docker ps -q \
     --filter "label=com.docker.compose.project=${WARDEN_ENV_NAME}" \
     --filter "label=com.docker.compose.service=nginx" 2>/dev/null | head -n 1 || true)"
-  if [[ -n "${nginx_cid}" ]]; then
-    net="$(docker inspect -f '{{index .Config.Labels "traefik.docker.network"}}' "${nginx_cid}" 2>/dev/null || true)"
-    [[ -n "${net}" ]] || net="${WARDEN_ENV_NAME}_default"
-    if docker network inspect "${net}" >/dev/null 2>&1; then
-      SHARE_MODE="direct"
-      SHARE_NET="${net}"
-      return 0
-    fi
-  fi
-  SHARE_MODE="traefik"
-  SHARE_NET=""
+  [[ -n "${nginx_cid}" ]] || return 1
+  net="$(docker inspect -f '{{index .Config.Labels "traefik.docker.network"}}' "${nginx_cid}" 2>/dev/null || true)"
+  [[ -n "${net}" ]] || net="${WARDEN_ENV_NAME}_default"
+  docker network inspect "${net}" >/dev/null 2>&1 || return 1
+  SHARE_NET="${net}"
   return 0
 }
 
 shareOriginDesc() {
-  if [[ "${SHARE_MODE}" == "direct" ]]; then
-    echo "http://nginx via docker network ${SHARE_NET} (real Host header)"
-  else
-    echo "https://127.0.0.1:443 via host network (Host: ${SHARE_LOCAL_HOST})"
-  fi
+  echo "http://nginx via docker network ${SHARE_NET} (real Host header)"
 }
 
 shareContainerRunning() {
@@ -188,27 +176,19 @@ shareUp() {
       docker pull "${SHARE_IMAGE}" || return $?
     fi
     docker rm -f "${SHARE_CONTAINER}" >/dev/null 2>&1 || true
-    shareDetectOrigin
-    if [[ "${SHARE_MODE}" != "direct" ]]; then
+    shareDetectOrigin || {
       error "Nginx container not found; run 'warden local up' first, then retry."
       return 1
-    fi
+    }
     echo "==> Starting Cloudflare quick tunnel (temp public URL, no account needed)..."
     echo "    Origin: $(shareOriginDesc)"
-    if [[ "${SHARE_MODE}" == "direct" ]]; then
-      docker run -d --rm --name "${SHARE_CONTAINER}" --network "${SHARE_NET}" "${SHARE_IMAGE}" \
-        tunnel --url http://nginx --no-autoupdate || return $?
-    else
-      docker run -d --rm --name "${SHARE_CONTAINER}" --network host "${SHARE_IMAGE}" \
-        tunnel --url https://127.0.0.1:443 \
-        --http-host-header "${SHARE_LOCAL_HOST}" \
-        --origin-server-name "${SHARE_LOCAL_HOST}" \
-        --no-tls-verify --no-autoupdate || return $?
-    fi
+    docker run -d --rm --name "${SHARE_CONTAINER}" --network "${SHARE_NET}" "${SHARE_IMAGE}" \
+      tunnel --url http://nginx --no-autoupdate || return $?
   fi
 
   echo "==> Waiting for tunnel URL (up to 90s)..."
   shareLoadState
+  local PREV_URL="${TUNNEL_URL}"
   local i
   for i in $(seq 1 45); do
     TUNNEL_URL="$(shareTunnelUrl || true)"
@@ -227,7 +207,11 @@ shareUp() {
   }
   TUNNEL_HOST="${TUNNEL_URL#https://}"
 
-  shareRewriteOn || return $?
+  if [[ "${BASE_URL_REWRITTEN}" == "1" && -n "${PREV_URL}" && "${TUNNEL_URL}" == "${PREV_URL}" ]]; then
+    echo "==> Already sharing ${TUNNEL_URL}/ (base URLs already rewritten)."
+  else
+    shareRewriteOn || return $?
+  fi
 
   shareSaveState
   sharePrintUrl
@@ -279,8 +263,9 @@ shareStatus() {
     [[ -n "${TUNNEL_URL}" ]] || TUNNEL_URL="${URL}"
     echo "==> Share tunnel: RUNNING (${SHARE_CONTAINER})"
     [[ -n "${TUNNEL_URL}" ]] && echo "    URL: ${TUNNEL_URL}/"
-    shareDetectOrigin
-    echo "    Origin: $(shareOriginDesc)"
+    if shareDetectOrigin; then
+      echo "    Origin: $(shareOriginDesc)"
+    fi
   else
     echo "==> Share tunnel: STOPPED"
   fi

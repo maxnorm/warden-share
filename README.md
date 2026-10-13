@@ -1,40 +1,58 @@
 # warden-share
 
-A [Warden](https://github.com/davidalger/warden) custom command that exposes your
-local Magento 2 environment over the internet via a temporary Cloudflare quick
-tunnel (`https://*.trycloudflare.com`, no account needed). Handy for testing
-changes on a real phone over the network.
+Warden custom command. Exposes local Magento 2 env over internet via temporary
+Cloudflare quick tunnel (`https://*.trycloudflare.com`, no account needed).
+Test changes on real phone over network.
+
+## Requirements
+
+- Warden Magento 2 project, env up, `nginx` container running
+- Host: `warden`, `docker`, `curl`
+- Optional: `qrencode` (prints phone-scannable QR code)
 
 ## Install
-
-Copy both files into your project's warden commands directory and make the
-command executable:
 
 ```console
 cp share.cmd share.help /path/to/project/.warden/commands/
 chmod +x /path/to/project/.warden/commands/share.cmd
 ```
 
-Requirements on the host: `warden`, `docker`, `curl`. Optional: `qrencode`
-(prints a phone-scannable QR code with the URL).
-
 ## Usage
 
 ```console
-warden share up       # share fully working site, test on phone
-warden share status   # re-print URL / check rewrite state
-warden share url      # print just the tunnel URL (for scripting)
-warden share logs     # show cloudflared logs ('-f' to follow)
+warden share up       # start tunnel, rewrite base URLs, print URL + QR
+warden share status   # tunnel state, URL, current base-URL host
+warden share url      # bare tunnel URL (scripting)
+warden share logs     # cloudflared logs ('-f' to follow)
 warden share down     # stop tunnel, restore local base URLs
 ```
 
-`up` starts a throwaway `cloudflared` container attached to the project docker
-network (proxying straight to the `nginx` container, so the real public Host
-header reaches Magento), then rewrites the base URLs + cookie domain in
-`app/etc/env.php` to the tunnel URL followed by `app:config:import` and a
-cache clean. `down` stops the tunnel and restores `env.php` (import + cache
-clean included). Rewrite state is kept in `.warden/share.state` inside the
-project.
+`down` also accepts `--keep-base-url` (stop tunnel, skip restore) and `stop`
+works as alias for `down`.
 
-Each `up` mints a new random URL; old URLs stop working on `down`. CMS content
-with hardcoded `.test` links is unaffected by the rewrite.
+## How it works
+
+`up` starts throwaway `cloudflare/cloudflared` container on project docker
+network, proxying straight to `nginx` service. Real public Host header reaches
+Magento: no canonical-redirect loop, correct cookies, valid edge cert.
+
+Then rewrites 3 locked values in `app/etc/env.php` (secure/unsecure
+`base_url`, empty `cookie_domain`), runs `app:config:import -n` (env.php
+change 500s site without it) + `cache:clean config full_page`.
+
+`down` stops container, restores original values, re-imports, cleans cache.
+Rewrite state (tunnel URL + originals) kept in `.warden/share.state` in
+project. `down` restores even when tunnel already gone. Re-running `up`
+against same URL skips redundant rewrite.
+
+Each `up` mints new random URL. Old URLs die on `down`. CMS content with
+hardcoded `.test` links unaffected by rewrite.
+
+## Warning
+
+Tunnel URL public, no auth. Anyone with URL opens site. Never share
+production data. Stop tunnel when done.
+
+## License
+
+MIT. See LICENSE.
